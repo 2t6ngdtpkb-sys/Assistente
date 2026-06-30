@@ -14,22 +14,22 @@ const LANGUAGES = [
 ];
 
 const UI_TEXT = {
-  it: { placeholder: "Scrivimi qualcosa...", send: "Invia", clear: "Nuova chat", thinking: "Sto pensando...", welcome: "Ciao! Sono il tuo assistente personale. Come posso aiutarti oggi?", title: "Il Tuo Assistente" },
-  en: { placeholder: "Write me something...", send: "Send", clear: "New chat", thinking: "Thinking...", welcome: "Hello! I'm your personal assistant. How can I help you today?", title: "Your Assistant" },
-  es: { placeholder: "Escríbeme algo...", send: "Enviar", clear: "Nueva charla", thinking: "Pensando...", welcome: "¡Hola! Soy tu asistente personal. ¿Cómo puedo ayudarte hoy?", title: "Tu Asistente" },
-  fr: { placeholder: "Écris-moi quelque chose...", send: "Envoyer", clear: "Nouveau chat", thinking: "Je réfléchis...", welcome: "Bonjour ! Je suis ton assistant personnel. Comment puis-je t'aider ?", title: "Ton Assistant" },
-  de: { placeholder: "Schreib mir etwas...", send: "Senden", clear: "Neuer Chat", thinking: "Ich denke nach...", welcome: "Hallo! Ich bin dein persönlicher Assistent. Wie kann ich dir helfen?", title: "Dein Assistent" },
-  pt: { placeholder: "Escreve algo...", send: "Enviar", clear: "Novo chat", thinking: "A pensar...", welcome: "Olá! Sou o teu assistente pessoal. Como posso ajudar-te hoje?", title: "O Teu Assistente" },
-  ja: { placeholder: "何か書いてください...", send: "送信", clear: "新しいチャット", thinking: "考え中...", welcome: "こんにちは！私はあなたの個人アシスタントです。今日はどのようにお手伝いできますか？", title: "あなたのアシスタント" },
-  zh: { placeholder: "写点什么...", send: "发送", clear: "新对话", thinking: "思考中...", welcome: "你好！我是您的个人助手。今天我能帮您什么？", title: "您的助手" },
-  ar: { placeholder: "اكتب لي شيئاً...", send: "إرسال", clear: "محادثة جديدة", thinking: "أفكر...", welcome: "مرحباً! أنا مساعدك الشخصي. كيف يمكنني مساعدتك اليوم؟", title: "مساعدك" },
-  ru: { placeholder: "Напиши мне что-нибудь...", send: "Отправить", clear: "Новый чат", thinking: "Думаю...", welcome: "Привет! Я твой личный ассистент. Чем могу помочь сегодня?", title: "Твой Ассистент" },
+  it: { placeholder: "Scrivimi qualcosa...", welcome: "Ciao! Sono il tuo assistente personale. Come posso aiutarti oggi?", title: "Il Tuo Assistente" },
+  en: { placeholder: "Write me something...", welcome: "Hello! I'm your personal assistant. How can I help you today?", title: "Your Assistant" },
+  es: { placeholder: "Escríbeme algo...", welcome: "¡Hola! Soy tu asistente personal. ¿Cómo puedo ayudarte hoy?", title: "Tu Asistente" },
+  fr: { placeholder: "Écris-moi quelque chose...", welcome: "Bonjour ! Je suis ton assistant personnel. Comment puis-je t'aider ?", title: "Ton Assistant" },
+  de: { placeholder: "Schreib mir etwas...", welcome: "Hallo! Ich bin dein persönlicher Assistent. Wie kann ich dir helfen?", title: "Dein Assistent" },
+  pt: { placeholder: "Escreve algo...", welcome: "Olá! Sou o teu assistente pessoal. Como posso ajudar-te hoje?", title: "O Teu Assistente" },
+  ja: { placeholder: "何か書いてください...", welcome: "こんにちは！私はあなたの個人アシスタントです。今日はどのようにお手伝いできますか？", title: "あなたのアシスタント" },
+  zh: { placeholder: "写点什么...", welcome: "你好！我是您的个人助手。今天我能帮您什么？", title: "您的助手" },
+  ar: { placeholder: "اكتب لي شيئاً...", welcome: "مرحباً! أنا مساعدك الشخصي. كيف يمكنني مساعدتك اليوم؟", title: "مساعدك" },
+  ru: { placeholder: "Напиши мне что-нибудь...", welcome: "Привет! Я твой личный ассистент. Чем могу помочь сегодня?", title: "Твой Ассистент" },
 };
 
+const GROQ_API_KEY = "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";
+
 const SYSTEM_PROMPT = (lang) =>
-  `You are an incredibly intelligent, warm, and helpful personal AI assistant. The user has selected the language: ${lang}. 
-CRITICAL: Always respond EXCLUSIVELY in the language matching the code "${lang}" (${LANGUAGES.find((l) => l.code === lang)?.label}). 
-Be thorough, precise, creative, and friendly. You have vast knowledge on any subject. Give detailed and useful answers. Never say you can't do something — always find a way to help.`;
+  `You are an incredibly intelligent, warm, and helpful personal AI assistant. Always respond EXCLUSIVELY in the language with code "${lang}" (${LANGUAGES.find((l) => l.code === lang)?.label}). Be thorough, precise, creative, and friendly.`;
 
 export default function App() {
   const [lang, setLang] = useState("it");
@@ -56,22 +56,28 @@ export default function App() {
     const newMessages = [...messages, { role: "user", content: text }];
     setMessages(newMessages);
     setLoading(true);
+
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${GROQ_API_KEY}`,
+        },
         body: JSON.stringify({
-          model: "claude-sonnet-4-6",
+          model: "llama3-8b-8192",
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT(lang) },
+            ...newMessages.map((m) => ({ role: m.role, content: m.content })),
+          ],
           max_tokens: 1000,
-          system: SYSTEM_PROMPT(lang),
-          messages: newMessages.map((m) => ({ role: m.role, content: m.content })),
         }),
       });
       const data = await response.json();
-      const reply = data.content?.map((b) => b.text || "").join("") || "...";
+      const reply = data.choices?.[0]?.message?.content || "...";
       setMessages([...newMessages, { role: "assistant", content: reply }]);
     } catch (e) {
-      setMessages([...newMessages, { role: "assistant", content: "⚠️ Errore di connessione. Riprova." }]);
+      setMessages([...newMessages, { role: "assistant", content: "⚠️ Errore: " + e.message }]);
     } finally {
       setLoading(false);
       setTimeout(() => inputRef.current?.focus(), 100);
@@ -90,7 +96,7 @@ export default function App() {
             <div style={{ width: 42, height: 42, borderRadius: "50%", background: "linear-gradient(135deg, #7c3aed, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>✦</div>
             <div>
               <div style={{ color: "#fff", fontWeight: 700, fontSize: 17 }}>{ui.title}</div>
-              <div style={{ color: "rgba(180,160,255,0.8)", fontSize: 12 }}>Powered by Claude · Always ready</div>
+              <div style={{ color: "rgba(180,160,255,0.8)", fontSize: 12 }}>Powered by Groq · Always ready</div>
             </div>
           </div>
           <div style={{ display: "flex", gap: "10px", alignItems: "center" }}>
@@ -127,8 +133,13 @@ export default function App() {
           <div ref={bottomRef} />
         </div>
         <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "rgba(0,0,0,0.2)", display: "flex", gap: "10px", alignItems: "flex-end" }}>
-          <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKey} placeholder={ui.placeholder} rows={1} style={{ flex: 1, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "14px", color: "#f0eeff", padding: "12px 16px", fontSize: 14.5, resize: "none", outline: "none", fontFamily: "inherit", lineHeight: 1.5, maxHeight: 140, overflowY: "auto" }} onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; }} />
-          <button onClick={sendMessage} disabled={loading || !input.trim()} style={{ width: 46, height: 46, borderRadius: "14px", flexShrink: 0, background: loading || !input.trim() ? "rgba(124,58,237,0.3)" : "linear-gradient(135deg, #7c3aed, #4f46e5)", border: "none", color: "#fff", cursor: loading || !input.trim() ? "not-allowed" : "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>{loading ? "…" : "↑"}</button>
+          <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKey} placeholder={ui.placeholder} rows={1}
+            style={{ flex: 1, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "14px", color: "#f0eeff", padding: "12px 16px", fontSize: 14.5, resize: "none", outline: "none", fontFamily: "inherit", lineHeight: 1.5, maxHeight: 140, overflowY: "auto" }}
+            onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; }} />
+          <button onClick={sendMessage} disabled={loading || !input.trim()}
+            style={{ width: 46, height: 46, borderRadius: "14px", flexShrink: 0, background: loading || !input.trim() ? "rgba(124,58,237,0.3)" : "linear-gradient(135deg, #7c3aed, #4f46e5)", border: "none", color: "#fff", cursor: loading || !input.trim() ? "not-allowed" : "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {loading ? "…" : "↑"}
+          </button>
         </div>
       </div>
       <style>{`@keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.5; } 40% { transform: translateY(-6px); opacity: 1; } } textarea::placeholder { color: rgba(255,255,255,0.3); }`}</style>
