@@ -1,4 +1,4 @@
-export const handler = async (event) => {
+exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
     return { statusCode: 405, body: "Method Not Allowed" };
   }
@@ -6,7 +6,6 @@ export const handler = async (event) => {
   try {
     const { messages, system } = JSON.parse(event.body);
 
-    // Converti messaggi nel formato Gemini
     const contents = messages.map((m) => ({
       role: m.role === "assistant" ? "model" : "user",
       parts: [{ text: m.content }],
@@ -36,7 +35,7 @@ export const handler = async (event) => {
   } catch (error) {
     return {
       statusCode: 500,
-      body: JSON.stringify({ error: "Errore del server" }),
+      body: JSON.stringify({ error: error.message }),
     };
   }
 };
