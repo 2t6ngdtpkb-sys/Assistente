@@ -243,36 +243,57 @@ export default function App() {
     setMessages([{ role: "assistant", content: UI_TEXT[lang].welcome }]);
   }, [lang]);
 
+  // Load Puter.js once (powers chat + image generation, no API keys needed)
+  useEffect(() => {
+    if (window.puter) return;
+    const script = document.createElement("script");
+    script.src = "https://js.puter.com/v2/";
+    script.async = true;
+    document.head.appendChild(script);
+  }, []);
+
+  const waitForPuter = async (timeoutMs = 8000) => {
+    const start = Date.now();
+    while (!window.puter || !window.puter.ai) {
+      if (Date.now() - start > timeoutMs) throw new Error("Puter.js non disponibile (controlla la connessione).");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    return window.puter;
+  };
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
   const askAstra = useCallback(
     async (history) => {
-      const response = await fetch("/.netlify/functions/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          system: SYSTEM_PROMPT(lang, isPro, deepResearch),
-          messages: history.map((m) => {
-            if (m.attachments && m.attachments.length > 0) {
-              const blocks = [];
-              m.attachments.forEach((a) => {
-                if (a.isImage) {
-                  blocks.push({ type: "image", source: { type: "base64", media_type: a.mediaType, data: a.base64 } });
-                } else {
-                  blocks.push({ type: "document", source: { type: "base64", media_type: a.mediaType, data: a.base64 }, title: a.name });
-                }
-              });
-              if (m.content) blocks.push({ type: "text", text: m.content });
-              return { role: m.role, content: blocks };
-            }
-            return { role: m.role, content: m.content };
-          }),
-        }),
-      });
-      const data = await response.json();
-      return data.reply || "...";
+      try {
+        const puter = await waitForPuter();
+        const content = history.map((m) => {
+          if (m.attachments && m.attachments.length > 0) {
+            const blocks = [];
+            m.attachments.forEach((a) => {
+              if (a.isImage) {
+                blocks.push({ type: "image_url", image_url: { url: a.dataUrl } });
+              }
+            });
+            if (m.content) blocks.push({ type: "text", text: m.content });
+            return { role: m.role, content: blocks };
+          }
+          return { role: m.role, content: m.content };
+        });
+
+        const messagesForPuter = [{ role: "system", content: SYSTEM_PROMPT(lang, isPro, deepResearch) }, ...content];
+
+        const response = await puter.ai.chat(messagesForPuter, {
+          model: isPro ? "gpt-5.4" : "gpt-5.4-mini",
+        });
+
+        const text = typeof response === "string" ? response : response?.message?.content || response?.text || "";
+        return text && text.trim() ? text : "⚠️ Risposta vuota dal modello. Riprova.";
+      } catch (err) {
+        return `⚠️ ${err?.message || "Errore di connessione con Puter.js."}`;
+      }
     },
     [lang, isPro, deepResearch]
   );
@@ -306,16 +327,11 @@ export default function App() {
   const removeAttachment = (id) => setAttachments((prev) => prev.filter((a) => a.id !== id));
 
   const generateImage = async (prompt) => {
-    const response = await fetch("/.netlify/functions/generate-image", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
-    });
-    const data = await response.json();
-    // expects { imageUrl } or { base64, mediaType }
-    if (data.imageUrl) return data.imageUrl;
-    if (data.base64) return `data:${data.mediaType || "image/png"};base64,${data.base64}`;
-    throw new Error("no-image");
+    const puter = await waitForPuter();
+    const imgEl = await puter.ai.txt2img(prompt, { model: "gpt-image-1" });
+    // puter.ai.txt2img resolves to an <img> element; use its src directly
+    if (imgEl && imgEl.src) return imgEl.src;
+    throw new Error("Nessuna immagine restituita da Puter.js.");
   };
 
   const sendMessage = async () => {
@@ -333,8 +349,9 @@ export default function App() {
       try {
         const imageUrl = await generateImage(text);
         setMessages([...newMessages, { role: "assistant", content: "", imageUrl, pro: isPro }]);
-      } catch {
-        setMessages([...newMessages, { role: "assistant", content: ui.imageError }]);
+      } catch (err) {
+        const detail = err && err.message && err.message !== "no-image" ? err.message : "";
+        setMessages([...newMessages, { role: "assistant", content: detail ? `${ui.imageError} (${detail})` : ui.imageError }]);
       } finally {
         setLoading(false);
         setTimeout(() => inputRef.current?.focus(), 80);
