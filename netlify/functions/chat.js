@@ -1,42 +1,47 @@
+// netlify/functions/chat.js
+// Proxies chat requests to the Anthropic API, supporting multimodal
+// content blocks (text, image, document) sent from the frontend.
+
 exports.handler = async (event) => {
   if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: "Method Not Allowed" };
+    return { statusCode: 405, body: "Method not allowed" };
   }
 
   try {
-    const { messages, system } = JSON.parse(event.body);
+    const { system, messages } = JSON.parse(event.body || "{}");
 
-    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer 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",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "llama-3.1-8b-instant",
-        messages: [
-          { role: "system", content: system },
-          ...messages.map((m) => ({ role: m.role, content: m.content })),
-        ],
-        max_tokens: 1000,
+        model: "claude-sonnet-4-6",
+        max_tokens: 2000,
+        system,
+        messages,
       }),
     });
 
     const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || "...";
+
+    if (data.error) {
+      return { statusCode: 500, body: JSON.stringify({ reply: null, error: data.error.message }) };
+    }
+
+    const reply = (data.content || [])
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
 
     return {
       statusCode: 200,
-      headers: {
-        "Content-Type": "application/json",
-        "Access-Control-Allow-Origin": "*",
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reply }),
     };
-  } catch (error) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: error.message }),
-    };
+  } catch (err) {
+    return { statusCode: 500, body: JSON.stringify({ reply: null, error: String(err) }) };
   }
 };
