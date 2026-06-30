@@ -65,7 +65,7 @@ export default function App() {
           "Authorization": `Bearer ${GROQ_API_KEY}`,
         },
         body: JSON.stringify({
-          model: "llama3-8b-8192",
+          model: "llama-3.1-8b-instant",
           messages: [
             { role: "system", content: SYSTEM_PROMPT(lang) },
             ...newMessages.map((m) => ({ role: m.role, content: m.content })),
@@ -74,7 +74,7 @@ export default function App() {
         }),
       });
       const data = await response.json();
-      const reply = data.choices?.[0]?.message?.content || "...";
+      const reply = data.choices?.[0]?.message?.content || JSON.stringify(data);
       setMessages([...newMessages, { role: "assistant", content: reply }]);
     } catch (e) {
       setMessages([...newMessages, { role: "assistant", content: "⚠️ Errore: " + e.message }]);
@@ -124,25 +124,4 @@ export default function App() {
           ))}
           {loading && (
             <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg, #7c3aed, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14 }}>✦</div>
-              <div style={{ padding: "14px 18px", borderRadius: "18px 18px 18px 4px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.08)", display: "flex", alignItems: "center", gap: 6 }}>
-                {[0, 1, 2].map((j) => <div key={j} style={{ width: 7, height: 7, borderRadius: "50%", background: "#a78bfa", animation: "bounce 1.2s infinite", animationDelay: `${j * 0.2}s` }} />)}
-              </div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-        <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(255,255,255,0.07)", background: "rgba(0,0,0,0.2)", display: "flex", gap: "10px", alignItems: "flex-end" }}>
-          <textarea ref={inputRef} value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKey} placeholder={ui.placeholder} rows={1}
-            style={{ flex: 1, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "14px", color: "#f0eeff", padding: "12px 16px", fontSize: 14.5, resize: "none", outline: "none", fontFamily: "inherit", lineHeight: 1.5, maxHeight: 140, overflowY: "auto" }}
-            onInput={(e) => { e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 140) + "px"; }} />
-          <button onClick={sendMessage} disabled={loading || !input.trim()}
-            style={{ width: 46, height: 46, borderRadius: "14px", flexShrink: 0, background: loading || !input.trim() ? "rgba(124,58,237,0.3)" : "linear-gradient(135deg, #7c3aed, #4f46e5)", border: "none", color: "#fff", cursor: loading || !input.trim() ? "not-allowed" : "pointer", fontSize: 18, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {loading ? "…" : "↑"}
-          </button>
-        </div>
-      </div>
-      <style>{`@keyframes bounce { 0%, 80%, 100% { transform: translateY(0); opacity: 0.5; } 40% { transform: translateY(-6px); opacity: 1; } } textarea::placeholder { color: rgba(255,255,255,0.3); }`}</style>
-    </div>
-  );
-}
+              <div style={{ width: 32, height: 32, borderRadius: "50%
