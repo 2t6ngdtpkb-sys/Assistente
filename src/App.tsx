@@ -169,23 +169,192 @@ const SYSTEM_PROMPT = (lang, advanced, deepResearch) =>
     advanced
       ? "You are running in Astra Pro mode: reason carefully and thoroughly through complex, multi-step problems before answering, surface trade-offs and edge cases, and give the most rigorous, well-structured answer possible."
       : "Be clear, helpful, and concise."
-  }${deepResearch ? " Deep research mode is active: break the question down, consider multiple angles and sources of evidence, and deliver a structured, thorough answer with clear sections rather than a short reply." : ""}`;
+  }${deepResearch ? " Deep research mode is active: break the question down, consider multiple angles and sources of evidence, and deliver a structured, thorough answer with clear sections rather than a short reply." : ""}
+Formatting rules: wrap the truly important words, numbers, names or conclusions in **double asterisks** so they render in bold (not whole paragraphs). Use Markdown headings (##), bullet lists (-) and numbered lists where useful. Keep paragraphs short.
+File generation rule: whenever the user asks you to create, write, generate or prepare a document, note, list, table, code file, CSV, or any other downloadable text-based content, output it inside a fenced block using EXACTLY this syntax so the app can turn it into a real downloadable attachment:
+\`\`\`file:descriptive-name.ext
+...full file content here...
+\`\`\`
+You may add normal explanatory text before/after the block, but content meant for the file must be ONLY inside it. Choose a sensible extension (.txt, .md, .csv, .json, .html, .js, .py, .css, etc). Never say you cannot produce a file — always use this block format instead.`;
 
 /* ----------------------------- helpers ----------------------------- */
 
 const SpeechRecognitionAPI =
   typeof window !== "undefined" ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
 
+const VOICE_LANG_MAP = { it: "it-IT", en: "en-US", es: "es-ES", fr: "fr-FR", de: "de-DE", pt: "pt-BR", ja: "ja-JP", zh: "zh-CN", ar: "ar-SA", ru: "ru-RU" };
+
+let cachedVoices = [];
+function refreshVoices() {
+  if (typeof window === "undefined" || !window.speechSynthesis) return;
+  cachedVoices = window.speechSynthesis.getVoices();
+}
+if (typeof window !== "undefined" && window.speechSynthesis) {
+  refreshVoices();
+  window.speechSynthesis.onvoiceschanged = refreshVoices;
+}
+
+function pickBestVoice(langCode) {
+  if (!cachedVoices.length) refreshVoices();
+  const candidates = cachedVoices.filter((v) => v.lang?.toLowerCase().startsWith(langCode.split("-")[0]));
+  if (!candidates.length) return null;
+  // Prefer higher-quality "natural"/online voices when available, then any exact-locale match.
+  const ranked = candidates.sort((a, b) => {
+    const score = (v) => (/natural|neural|online|enhanced/i.test(v.name) ? 2 : v.lang.toLowerCase() === langCode.toLowerCase() ? 1 : 0);
+    return score(b) - score(a);
+  });
+  return ranked[0];
+}
+
+// Strips markdown markup so the spoken voice doesn't say "asterisk asterisk" etc.
+function stripMarkdownForSpeech(text) {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[*_#>`~]/g, "")
+    .replace(/\[(.*?)\]\(.*?\)/g, "$1")
+    .replace(/\n{2,}/g, ". ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function speak(text, lang, onEnd) {
   if (typeof window === "undefined" || !window.speechSynthesis) { onEnd?.(); return; }
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
-  const langMap = { it: "it-IT", en: "en-US", es: "es-ES", fr: "fr-FR", de: "de-DE", pt: "pt-BR", ja: "ja-JP", zh: "zh-CN", ar: "ar-SA", ru: "ru-RU" };
-  utter.lang = langMap[lang] || "en-US";
-  utter.rate = 1.02;
-  utter.onend = () => onEnd?.();
-  utter.onerror = () => onEnd?.();
-  window.speechSynthesis.speak(utter);
+  const clean = stripMarkdownForSpeech(text);
+  if (!clean) { onEnd?.(); return; }
+  const localeCode = VOICE_LANG_MAP[lang] || "en-US";
+
+  // Speak in manageable chunks so long replies don't get cut off by some browsers' utterance limits.
+  const chunks = clean.match(/[^.!?\n]+[.!?\n]*/g) || [clean];
+  let i = 0;
+  const voice = pickBestVoice(localeCode);
+
+  const speakNext = () => {
+    if (i >= chunks.length) { onEnd?.(); return; }
+    const utter = new SpeechSynthesisUtterance(chunks[i].trim());
+    utter.lang = localeCode;
+    if (voice) utter.voice = voice;
+    utter.rate = 1.0;
+    utter.pitch = 1.03;
+    utter.volume = 1;
+    utter.onend = () => { i += 1; speakNext(); };
+    utter.onerror = () => { i += 1; speakNext(); };
+    window.speechSynthesis.speak(utter);
+  };
+  speakNext();
+}
+
+/* ---- lightweight markdown renderer (bold / headings / lists / code / file blocks) ---- */
+
+// Extracts ```file:name.ext ... ``` blocks from a reply and returns the remaining
+// text plus a list of {name, content} attachments to render as real downloadable files.
+function extractFileBlocks(raw) {
+  const fileBlockRe = /```file:([^\n`]+)\n([\s\S]*?)```/g;
+  const files = [];
+  const text = raw.replace(fileBlockRe, (_, name, content) => {
+    files.push({ name: name.trim(), content: content.replace(/\n$/, "") });
+    return "";
+  }).trim();
+  return { text, files };
+}
+
+function guessMimeType(filename) {
+  const ext = filename.split(".").pop().toLowerCase();
+  const map = { txt: "text/plain", md: "text/markdown", csv: "text/csv", json: "application/json", html: "text/html", js: "text/javascript", css: "text/css", py: "text/x-python", xml: "application/xml", svg: "image/svg+xml" };
+  return map[ext] || "text/plain";
+}
+
+// Renders a constrained markdown subset (bold, italic, inline code, code fences,
+// headings, bullet/numbered lists) as React nodes — no extra dependency required.
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const blocks = [];
+  let i = 0;
+  let key = 0;
+
+  const renderInline = (line) => {
+    const parts = [];
+    const re = /(\*\*([^*]+)\*\*|`([^`]+)`|\*([^*]+)\*)/g;
+    let last = 0, m;
+    while ((m = re.exec(line))) {
+      if (m.index > last) parts.push(line.slice(last, m.index));
+      if (m[2] !== undefined) parts.push(<strong key={key++} style={{ fontWeight: 700 }}>{m[2]}</strong>);
+      else if (m[3] !== undefined) parts.push(<code key={key++} style={{ background: "#F0F1F5", padding: "1px 6px", borderRadius: 6, fontSize: "0.92em", fontFamily: "'JetBrains Mono', monospace" }}>{m[3]}</code>);
+      else if (m[4] !== undefined) parts.push(<em key={key++}>{m[4]}</em>);
+      last = re.lastIndex;
+    }
+    if (last < line.length) parts.push(line.slice(last));
+    return parts.length ? parts : line;
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^```/.test(line)) {
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { codeLines.push(lines[i]); i++; }
+      i++;
+      blocks.push(<pre key={key++} style={{ background: "#15161A", color: "#E9E9EC", padding: "12px 14px", borderRadius: 10, fontSize: 13, overflowX: "auto", fontFamily: "'JetBrains Mono', monospace", margin: "6px 0" }}><code>{codeLines.join("\n")}</code></pre>);
+      continue;
+    }
+    if (/^#{1,3}\s/.test(line)) {
+      const level = line.match(/^(#{1,3})/)[1].length;
+      const content = line.replace(/^#{1,3}\s/, "");
+      const sizes = { 1: 19, 2: 16.5, 3: 15 };
+      blocks.push(<div key={key++} style={{ fontWeight: 800, fontSize: sizes[level], margin: "10px 0 4px", letterSpacing: "-0.01em" }}>{renderInline(content)}</div>);
+      i++;
+      continue;
+    }
+    if (/^\s*[-*]\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*]\s/.test(lines[i])) { items.push(lines[i].replace(/^\s*[-*]\s/, "")); i++; }
+      blocks.push(
+        <ul key={key++} style={{ margin: "4px 0 8px", paddingLeft: 20 }}>
+          {items.map((it, idx) => <li key={idx} style={{ marginBottom: 3 }}>{renderInline(it)}</li>)}
+        </ul>
+      );
+      continue;
+    }
+    if (/^\s*\d+\.\s/.test(line)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s/.test(lines[i])) { items.push(lines[i].replace(/^\s*\d+\.\s/, "")); i++; }
+      blocks.push(
+        <ol key={key++} style={{ margin: "4px 0 8px", paddingLeft: 20 }}>
+          {items.map((it, idx) => <li key={idx} style={{ marginBottom: 3 }}>{renderInline(it)}</li>)}
+        </ol>
+      );
+      continue;
+    }
+    if (line.trim() === "") { blocks.push(<div key={key++} style={{ height: 6 }} />); i++; continue; }
+    blocks.push(<div key={key++} style={{ marginBottom: 2 }}>{renderInline(line)}</div>);
+    i++;
+  }
+  return blocks;
+}
+
+function downloadFile(name, content) {
+  const blob = new Blob([content], { type: guessMimeType(name) + ";charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function FileAttachmentCard({ file, hairline, surfaceMute, ink, inkSoft, accent }) {
+  const ext = file.name.split(".").pop().toUpperCase();
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", borderRadius: 12, border: `1px solid ${hairline}`, background: surfaceMute, marginTop: 8, maxWidth: 320 }}>
+      <div style={{ width: 34, height: 34, borderRadius: 8, background: accent, color: "#fff", fontSize: 10.5, fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>{ext.slice(0, 4)}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{file.name}</div>
+        <div style={{ fontSize: 11, color: inkSoft }}>{Math.max(1, Math.round(file.content.length / 1024 * 10) / 10)} KB</div>
+      </div>
+      <button onClick={() => downloadFile(file.name, file.content)} style={{ border: "none", background: ink, color: "#fff", borderRadius: 8, padding: "6px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>↓</button>
+    </div>
+  );
 }
 
 /* ----------------------------- app ----------------------------- */
@@ -364,7 +533,8 @@ export default function App() {
     setLoading(true);
     try {
       const reply = await askAstra(newMessages);
-      setMessages([...newMessages, { role: "assistant", content: reply, pro: isPro }]);
+      const { text: cleanReply, files } = extractFileBlocks(reply);
+      setMessages([...newMessages, { role: "assistant", content: cleanReply || reply, files, pro: isPro }]);
     } catch {
       setMessages([...newMessages, { role: "assistant", content: ui.error }]);
     } finally {
@@ -470,15 +640,22 @@ export default function App() {
     if (muted) return;
     setVoiceState("listening");
     const rec = new SpeechRecognitionAPI();
-    const langMap = { it: "it-IT", en: "en-US", es: "es-ES", fr: "fr-FR", de: "de-DE", pt: "pt-BR", ja: "ja-JP", zh: "zh-CN", ar: "ar-SA", ru: "ru-RU" };
-    rec.lang = langMap[lang] || "en-US";
+    rec.lang = VOICE_LANG_MAP[lang] || "en-US";
     rec.interimResults = true;
+    rec.continuous = false;
     rec.maxAlternatives = 1;
     rec.onresult = (e) => {
       const transcript = Array.from(e.results).map((r) => r[0].transcript).join("");
       setVoiceTranscript(transcript);
     };
-    rec.onerror = () => setVoiceState("idle");
+    rec.onerror = (e) => {
+      // "no-speech" / "aborted" just mean nothing was heard — keep the call alive and listen again.
+      if ((e.error === "no-speech" || e.error === "aborted") && !muted) {
+        setTimeout(() => { if (recognitionRef.current) beginListening(); }, 300);
+      } else {
+        setVoiceState("idle");
+      }
+    };
     rec.onend = async () => {
       setVoiceTranscript((current) => {
         if (current.trim()) handleVoiceResult(current.trim());
@@ -495,10 +672,11 @@ export default function App() {
     setMessages(newMessages);
     try {
       const reply = await askAstra(newMessages);
-      setMessages((m) => [...m, { role: "assistant", content: reply, pro: isPro }]);
-      setLastReply(reply);
+      const { text: cleanReply, files } = extractFileBlocks(reply);
+      setMessages((m) => [...m, { role: "assistant", content: cleanReply || reply, files, pro: isPro }]);
+      setLastReply(cleanReply || reply);
       setVoiceState("speaking");
-      speak(reply, lang, () => {
+      speak(cleanReply || reply, lang, () => {
         setVoiceTranscript("");
         if (recognitionRef.current && !muted) beginListening();
         else setVoiceState("idle");
@@ -542,10 +720,10 @@ export default function App() {
   const goldSoft = "#FBF4E2";
 
   return (
-    <div style={{ minHeight: "100vh", background: surfaceMute, display: "flex", fontFamily: "'Inter', 'Helvetica Neue', system-ui, sans-serif", color: ink, overflowX: "hidden", width: "100%", position: "relative" }}>
+    <div style={{ minHeight: "100vh", background: surfaceMute, display: "flex", fontFamily: "'Plus Jakarta Sans', 'Inter', system-ui, sans-serif", color: ink, overflowX: "hidden", width: "100%", position: "relative" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap');
-        html, body { margin: 0; overflow-x: hidden; max-width: 100%; }
+        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&display=swap');
+        html, body { margin: 0; overflow-x: hidden; max-width: 100%; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
         * { box-sizing: border-box; min-width: 0; }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-thumb { background: #D8D9DE; border-radius: 8px; }
@@ -681,7 +859,10 @@ export default function App() {
                   {m.imageUrl && (
                     <img src={m.imageUrl} alt="" style={{ maxWidth: "100%", width: 320, borderRadius: 14, border: `1px solid ${hairline}`, marginBottom: m.content ? 8 : 0 }} />
                   )}
-                  {m.content && <div style={{ fontSize: 14.5, lineHeight: 1.7, color: "#27282D", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.content}</div>}
+                  {m.content && <div style={{ fontSize: 14.5, lineHeight: 1.75, color: "#27282D", wordBreak: "break-word" }}>{renderMarkdown(m.content)}</div>}
+                  {m.files && m.files.length > 0 && m.files.map((f) => (
+                    <FileAttachmentCard key={f.name} file={f} hairline={hairline} surfaceMute={surfaceMute} ink={ink} inkSoft={inkSoft} accent={accent} />
+                  ))}
                 </div>
               </div>
             ))}
@@ -822,7 +1003,7 @@ export default function App() {
                 width: 108, height: 108, borderRadius: "50%", position: "relative", zIndex: 3,
                 background: voiceState === "speaking" ? `radial-gradient(circle at 32% 30%, #FFE9AE, ${gold} 55%, #6b5316 100%)` : voiceState === "thinking" ? `radial-gradient(circle at 32% 30%, #4a4d6b, #1c1d33)` : `radial-gradient(circle at 32% 30%, #6f7bff, ${accent} 55%, #1c2090 100%)`,
                 boxShadow: voiceState === "speaking" ? `0 0 50px ${gold}66` : `0 0 50px ${accent}55`,
-                animation: voiceState === "thinking" ? "orbBreathe .9s infinite ease-in-out" : "none",
+                animation: voiceState === "thinking" ? "orbBreathe .9s infinite ease-in-out" : voiceState === "listening" ? "orbListen 1.6s infinite ease-in-out" : "none",
                 transition: "transform .08s linear, background .3s, box-shadow .3s",
               }}>
                 {voiceState === "thinking" ? (
