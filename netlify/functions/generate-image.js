@@ -8,6 +8,13 @@ exports.handler = async (event) => {
   }
 
   try {
+    if (!process.env.OPENAI_API_KEY) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ error: "OPENAI_API_KEY non configurata su Netlify (Site settings > Environment variables)." }),
+      };
+    }
+
     const { prompt } = JSON.parse(event.body || "{}");
     if (!prompt) {
       return { statusCode: 400, body: JSON.stringify({ error: "Missing prompt" }) };
@@ -28,8 +35,9 @@ exports.handler = async (event) => {
 
     const data = await response.json();
 
-    if (data.error) {
-      return { statusCode: 500, body: JSON.stringify({ error: data.error.message }) };
+    if (!response.ok || data.error) {
+      const msg = data.error?.message || `OpenAI API ha risposto con status ${response.status}`;
+      return { statusCode: 500, body: JSON.stringify({ error: msg }) };
     }
 
     const b64 = data.data?.[0]?.b64_json;

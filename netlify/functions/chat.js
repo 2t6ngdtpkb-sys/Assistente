@@ -8,6 +8,13 @@ exports.handler = async (event) => {
   }
 
   try {
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return {
+        statusCode: 500,
+        body: JSON.stringify({ reply: null, error: "ANTHROPIC_API_KEY non configurata su Netlify (Site settings > Environment variables)." }),
+      };
+    }
+
     const { system, messages } = JSON.parse(event.body || "{}");
 
     const response = await fetch("https://api.anthropic.com/v1/messages", {
@@ -27,8 +34,9 @@ exports.handler = async (event) => {
 
     const data = await response.json();
 
-    if (data.error) {
-      return { statusCode: 500, body: JSON.stringify({ reply: null, error: data.error.message }) };
+    if (!response.ok || data.error) {
+      const msg = data.error?.message || `Anthropic API ha risposto con status ${response.status}`;
+      return { statusCode: 500, body: JSON.stringify({ reply: null, error: msg }) };
     }
 
     const reply = (data.content || [])
